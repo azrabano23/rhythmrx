@@ -75,3 +75,53 @@ def load_all_cgm(limit: int | None = None) -> list[tuple[str, list[tuple[datetim
         except Exception:
             continue
     return out
+
+
+def load_session(path: str) -> dict:
+    """Read one patient file once; return {'cgm': [(ts, mg/dL)], 'meals': [(ts, grams)]}.
+
+    Meal grams are summed from the free-text "Dietary intake" column (e.g.
+    'Boiled egg 40 g\\nCucumber 100 g' -> 140 g) — a usable proxy for meal size."""
+    import re
+    import pandas as pd
+
+    engine = "xlrd" if path.endswith(".xls") else "openpyxl"
+    df = pd.read_excel(path, engine=engine)
+    tcol = next(c for c in df.columns if "Date" in str(c))
+    gcol = next(c for c in df.columns if "CGM" in str(c))
+    dcol = next((c for c in df.columns if "Dietary" in str(c)), None)
+    ts_all = pd.to_datetime(df[tcol], errors="coerce")
+
+    cgm: list[tuple[datetime, float]] = []
+    for ts, g in zip(ts_all, df[gcol]):
+        if pd.isna(ts) or pd.isna(g):
+            continue
+        try:
+            cgm.append((ts.to_pydatetime(), float(g)))
+        except (TypeError, ValueError):
+            continue
+
+    meals: list[tuple[datetime, float]] = []
+    if dcol is not None:
+        for ts, txt in zip(ts_all, df[dcol]):
+            if pd.isna(ts) or pd.isna(txt):
+                continue
+            grams = sum(float(x) for x in re.findall(r"(\d+(?:\.\d+)?)\s*g", str(txt)))
+            if grams > 0:
+                meals.append((ts.to_pydatetime(), grams))
+    return {"cgm": cgm, "meals": meals}
+
+
+def load_all_sessions(limit: int | None = None) -> list[tuple[str, dict]]:
+    """Load up to `limit` patients as (patient_id, {'cgm','meals'})."""
+    files = t2dm_files()
+    if limit:
+        files = files[:limit]
+    out = []
+    for f in files:
+        pid = os.path.basename(f).split("_")[0]
+        try:
+            out.append((pid, load_session(f)))
+        except Exception:
+            continue
+    return out

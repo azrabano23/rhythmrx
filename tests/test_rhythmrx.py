@@ -90,3 +90,29 @@ def test_real_cohort_dawn_and_personalization():
     assert summary["personal_peak_spread_h"] > 1.0
     spread = personalization_spread(patients)
     assert spread["pct_materially_different_from_clinic"] > 50.0   # most patients need a different time
+
+
+# ---- validation + API ----------------------------------------------------
+def test_validation_on_fixture():
+    from rhythmrx.validation import response_per_gram_by_hour
+    # two patients with meals; just exercise the pipeline shape
+    base = datetime(2021, 1, 1, 8)
+    cgm = [(base + timedelta(minutes=15 * k), 120 + 30 * math.sin(k / 6)) for k in range(64)]
+    meals = [(base, 50.0), (base + timedelta(hours=5), 60.0)]
+    sessions = [("p", {"cgm": cgm, "meals": meals})]
+    rpg = response_per_gram_by_hour(sessions)
+    assert isinstance(rpg, dict)
+
+
+def test_api_recommend():
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+    from app.main import app
+    c = TestClient(app)
+    r = c.post("/api/recommend", json={"cortisol": [
+        {"hour": 8, "value": 0.85}, {"hour": 14, "value": 0.55}, {"hour": 20, "value": 0.2}]})
+    assert r.status_code == 200
+    d = r.json()
+    assert 6.0 <= d["recommended_dose_hour"] <= 20.0
+    assert len(d["glucose_personalized"]) > 10
+    assert c.get("/").status_code == 200

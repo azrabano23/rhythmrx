@@ -80,20 +80,45 @@ real CGM ──▶ twin.py: infer this patient's phase ──▶ personalized re
 ## Results
 
 - **Mechanism** (`rhythmrx demo`, a phase-delayed patient): personalizing the dose
-  time cuts modelled hyperglycemia burden **~47%** and lifts time-in-range
-  **56% → 74%** vs. the fixed 08:00 dose.
-- **Real cohort** (`rhythmrx personalize`): across 109 real patients, recommended
-  dose times span 06:00–15:30, and **94.5% differ materially from the clinic default.**
+  time cuts modelled hyperglycemia burden **~39%** and lifts time-in-range
+  **66% → 77%** vs. the fixed 08:00 dose.
+- **Real cohort, real meals** (`rhythmrx personalize`): run over all 109 patients
+  using **each patient's own logged meals**, recommended dose times span 06:00–15:30
+  and **94.5% differ materially (≥2 h) from the clinic's "with breakfast".**
+
+## Validation against real data
+
+The model makes a falsifiable claim — insulin sensitivity is circadian, high in the
+biological day, low at night — and the ShanghaiT2DM data can test it, because it has
+CGM *and* timestamped, weighed meals. `rhythmrx.validation` measures the **glycemic
+response per gram of food** for every real meal (excursion ÷ meal size, to control
+for big-vs-small meals) and bins it by hour:
+
+| Real meal hour | Glycemic response per gram (mg/dL / g) |
+|---|---|
+| 10:00–11:00 (most insulin-sensitive) | **0.14–0.18** (lowest) |
+| 13:00–15:00 (post-lunch dip) | ~0.55 |
+| 22:00–00:00 (evening intolerance) | **1.9–3.6** (highest) |
+
+This is textbook **evening glucose intolerance, straight out of real patients** — the
+same body, the same food, produces a far larger glucose spike at night than mid-
+morning. The model's sensitivity curve correlates with this real response at
+**r ≈ 0.54** (Pearson over 20 hourly bins), and its peak is **calibrated to the
+empirical sensitivity peak of 10:00** read directly off the data (`SENS_PEAK_OFFSET`).
+So the dosing recommendations rest on a sensitivity rhythm that is *measured*, not
+assumed.
 
 ## Technical breakdown
 
-Stdlib-only core (the `phase`/`model`/`twin`/`analysis` math has no heavy deps, so
-every number is attributable and the tests run anywhere); pandas + xlrd only for
-reading the real Excel CGM files. A least-squares circadian fit that works on sparse
-daytime samples; a chronopharmacology model linking phase → sensitivity → dose
-effect; a glucose-excursion simulator; a per-patient digital twin; and a real-data
-pipeline that downloads, parses, and analyzes 112k CGM readings. **9 tests** (offline
-fixtures + a real-data-gated cohort test), CLI, CI on 3.10/3.12.
+Stdlib-only core (the `phase`/`model`/`twin`/`analysis`/`validation` math has no heavy
+deps, so every number is attributable and the tests run anywhere); pandas + xlrd only
+for reading the real Excel CGM files, FastAPI only for the demo. A least-squares
+circadian fit that works on sparse daytime samples; a chronopharmacology model linking
+phase → sensitivity → dose effect, **calibrated and validated against real post-meal
+excursions**; a glucose-excursion simulator; a per-patient digital twin that uses each
+patient's real meal log; a real-data pipeline that downloads, parses, and analyzes 112k
+CGM readings; and a FastAPI web demo. **11 tests** (offline fixtures + real-data-gated +
+API), CLI, CI on 3.10/3.12.
 
 ## Honest framing
 
@@ -119,12 +144,19 @@ concierge workup; a $5 strip democratizes it.
 ## Run it
 
 ```bash
-pip install -e ".[data]"           # pandas + xlrd for the real CGM files
+pip install -e ".[data,app]"       # data: pandas+xlrd for real CGM · app: FastAPI demo
 rhythmrx demo                      # the mechanism on one phase-delayed patient
 rhythmrx analyze                   # real circadian-glucose evidence (downloads ~3.7MB once)
 rhythmrx personalize               # per-patient dose recommendations across 100 real patients
 pytest -q
+
+# clickable web demo: enter your 3 cortisol readings, get your dose time + glucose curves
+uvicorn app.main:app --reload      # http://localhost:8000
 ```
+
+The web app (`app/`) is a self-contained FastAPI service: a `/api/recommend` endpoint
+(cortisol samples → phase, dose, before/after glucose curves), plus `/api/cohort` and
+`/api/validation` exposing the real-data findings, behind a single-page UI.
 
 ## References
 

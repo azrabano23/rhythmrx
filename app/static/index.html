@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RhythmRX — chronotherapy for diabetes</title>
+<style>
+  :root { --bg:#0b1020; --card:#141b2e; --ink:#e8edf7; --mut:#8e9bb5; --acc:#43d6a3; --warn:#ff7a7a; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  .wrap { max-width:760px; margin:0 auto; padding:32px 20px 64px; }
+  h1 { font-size:26px; margin:0 0 4px; }
+  .sub { color:var(--mut); margin:0 0 28px; }
+  .card { background:var(--card); border:1px solid #223; border-radius:14px; padding:20px 22px; margin-bottom:18px; }
+  label { display:block; color:var(--mut); font-size:13px; margin-bottom:6px; }
+  .row { display:flex; gap:14px; flex-wrap:wrap; }
+  .row > div { flex:1; min-width:150px; }
+  input[type=range] { width:100%; }
+  .val { color:var(--acc); font-weight:600; }
+  button { background:var(--acc); color:#06281d; border:0; border-radius:10px; padding:12px 18px; font-weight:700; font-size:15px; cursor:pointer; margin-top:8px; }
+  .result { display:none; }
+  .big { font-size:34px; font-weight:800; letter-spacing:-.5px; }
+  .pill { display:inline-block; background:#06281d; color:var(--acc); padding:3px 10px; border-radius:99px; font-size:13px; font-weight:700; }
+  .muted { color:var(--mut); }
+  svg { width:100%; height:170px; display:block; }
+  .leg { font-size:12px; color:var(--mut); }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:99px; vertical-align:middle; margin-right:5px; }
+  a { color:var(--acc); }
+  .foot { color:var(--mut); font-size:12.5px; margin-top:8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>RhythmRX</h1>
+  <p class="sub">Same pill, same dose — the right <em>hour</em>. Tell us your cortisol rhythm; we'll tell you when to take your diabetes medication.</p>
+
+  <div class="card">
+    <p class="muted" style="margin-top:0">Your cortisol (the body-clock hormone) from a spit strip — 3 times today. Higher in the morning, lower at night.</p>
+    <div class="row" id="inputs">
+      <div><label>Morning (8am): <span class="val" id="v0">0.85</span></label><input type="range" min="0" max="1" step="0.01" value="0.85" data-h="8" oninput="document.getElementById('v0').textContent=this.value"></div>
+      <div><label>Afternoon (2pm): <span class="val" id="v1">0.55</span></label><input type="range" min="0" max="1" step="0.01" value="0.55" data-h="14" oninput="document.getElementById('v1').textContent=this.value"></div>
+      <div><label>Evening (8pm): <span class="val" id="v2">0.20</span></label><input type="range" min="0" max="1" step="0.01" value="0.20" data-h="20" oninput="document.getElementById('v2').textContent=this.value"></div>
+    </div>
+    <button onclick="run()">Find my optimal dose time →</button>
+  </div>
+
+  <div class="card result" id="result">
+    <div class="row">
+      <div>
+        <label>RhythmRX says take it at</label>
+        <div class="big" id="dose" style="color:var(--acc)">—</div>
+        <span class="muted">vs the clinic's default <b id="clinic">8:00</b> ("with breakfast")</span>
+      </div>
+      <div>
+        <label>Modelled hyperglycemia cut</label>
+        <div class="big" id="redux">—</div>
+        <span class="muted">time-in-range <b id="tir">—</b></span>
+      </div>
+    </div>
+    <div style="margin-top:18px">
+      <div class="leg"><span class="dot" style="background:var(--warn)"></span>glucose if dosed at 8am &nbsp; <span class="dot" style="background:var(--acc)"></span>glucose if dosed at your time &nbsp; <span class="muted">— dashed = hyperglycemia threshold</span></div>
+      <svg id="chart" viewBox="0 0 700 170" preserveAspectRatio="none"></svg>
+    </div>
+    <p class="foot">Decision support, not medical advice. Magnitude is model-internal; the personalization is validated on real patient data below.</p>
+  </div>
+
+  <div class="card">
+    <label>Why this isn't one-size-fits-all — real data</label>
+    <div id="cohort" class="muted">Loading the ShanghaiT2DM cohort (100 real type-2 patients)…</div>
+  </div>
+</div>
+
+<script>
+async function run() {
+  const cortisol = [...document.querySelectorAll('#inputs input')].map(i => ({hour:+i.dataset.h, value:+i.value}));
+  const r = await fetch('/api/recommend', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cortisol})});
+  const d = await r.json();
+  document.getElementById('result').style.display='block';
+  const fmt = h => `${String(Math.floor(h)).padStart(2,'0')}:${String(Math.round((h%1)*60)).padStart(2,'0')}`;
+  document.getElementById('dose').textContent = fmt(d.recommended_dose_hour);
+  document.getElementById('clinic').textContent = fmt(d.clinic_dose_hour);
+  document.getElementById('redux').textContent = d.hyperglycemia_reduction_pct + '%';
+  document.getElementById('tir').textContent = d.clinic.time_in_range_pct + '% → ' + d.personalized.time_in_range_pct + '%';
+  drawChart(d);
+}
+function drawChart(d) {
+  const W=700,H=170,pad=8, all=[...d.glucose_clinic,...d.glucose_personalized].map(p=>p[1]);
+  const lo=Math.min(...all,90), hi=Math.max(...all,d.hyper_threshold+10);
+  const x=t=>pad+(t-6)/(24-6)*(W-2*pad), y=g=>H-pad-(g-lo)/(hi-lo)*(H-2*pad);
+  const path=arr=>arr.map((p,i)=>(i?'L':'M')+x(p[0]).toFixed(1)+' '+y(p[1]).toFixed(1)).join(' ');
+  const thr=y(d.hyper_threshold);
+  document.getElementById('chart').innerHTML =
+    `<line x1="${pad}" y1="${thr}" x2="${W-pad}" y2="${thr}" stroke="#556" stroke-dasharray="4 4"/>`+
+    `<path d="${path(d.glucose_clinic)}" fill="none" stroke="#ff7a7a" stroke-width="2.5"/>`+
+    `<path d="${path(d.glucose_personalized)}" fill="none" stroke="#43d6a3" stroke-width="2.5"/>`;
+}
+(async () => {
+  try {
+    const c = await (await fetch('/api/cohort')).json();
+    document.getElementById('cohort').innerHTML =
+      `Across <b>${c.patients} real patients</b> (${c.cgm_readings.toLocaleString()} CGM readings): the dawn phenomenon is real (+${c.dawn_rise_mgdl} mg/dL into the morning), and each patient's glucose peaks at a <b>different hour</b> (σ ${c.personal_peak_spread_h}h, ${c.personal_peak_range_h[0]}:00–${c.personal_peak_range_h[1]}:00). There is no universal best time — which is the whole point.`;
+  } catch(e){ document.getElementById('cohort').textContent='(run with [data] extra to load the real cohort)'; }
+})();
+run();
+</script>
+</body>
+</html>

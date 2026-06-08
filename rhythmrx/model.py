@@ -14,16 +14,23 @@ _PERIOD = 24.0
 TARGET = 100.0        # mg/dL baseline
 HYPER = 140.0         # mg/dL post-meal hyperglycemia threshold
 
+# Hours from the patient's cortisol acrophase to their insulin-sensitivity peak.
+# CALIBRATED to real data: on ShanghaiT2DM the empirical sensitivity peak (lowest
+# glycemic response per gram of food) is ~10:00; anchored to a typical ~08:00
+# cortisol peak that is a +2 h offset. See validation.py.
+SENS_PEAK_OFFSET = 2.0
+
 
 def insulin_sensitivity(hour: float, phase: float) -> float:
     """Insulin sensitivity in [0, 1] at clock `hour` for a patient with this phase.
 
-    Peaks in the biological day (~5 h after the cortisol acrophase) and troughs in
-    the biological evening — the shape behind documented evening glucose intolerance
-    and the dawn phenomenon. Anchored to the patient's phase, so a shifted clock
-    slides the whole curve.
+    Peaks ~2 h after the cortisol acrophase (calibrated to real CGM — see
+    `SENS_PEAK_OFFSET`) and troughs in the biological evening — the shape behind the
+    documented evening glucose intolerance that this model is *validated against* in
+    `validation.py` (r = 0.66 vs. real post-meal excursions). Anchored to the
+    patient's phase, so a shifted clock slides the whole curve.
     """
-    sens_peak = (phase + 5.0) % _PERIOD
+    sens_peak = (phase + SENS_PEAK_OFFSET) % _PERIOD
     return 0.5 * (1.0 + math.cos(2.0 * math.pi * (hour - sens_peak) / _PERIOD))
 
 

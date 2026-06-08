@@ -36,6 +36,26 @@ def infer_phase_from_cgm(readings: list[tuple[datetime, float]]) -> float:
     return acrophase(hourly_profile(readings))
 
 
+def typical_meals(meal_events: list[tuple[datetime, float]]) -> list[tuple[float, float]]:
+    """Collapse a patient's many real meal events into one representative day.
+
+    Real logs have meals across many days; the dose optimizer needs a single typical
+    schedule. We bin meal events by hour, keep hours the patient eats at *regularly*,
+    and average the grams — recovering their real breakfast/lunch/dinner timing and
+    size. Falls back to a standard schedule if the log is too sparse.
+    """
+    if not meal_events:
+        return STANDARD_MEALS
+    by_hour: dict[int, list[float]] = {}
+    for ts, grams in meal_events:
+        by_hour.setdefault(ts.hour, []).append(grams)
+    # a "regular" meal hour: eaten on a meaningful fraction of logged days
+    threshold = max(2, len(meal_events) // 12)
+    sched = [(float(h), sum(v) / len(v)) for h, v in sorted(by_hour.items())
+             if len(v) >= threshold]
+    return sched or STANDARD_MEALS
+
+
 def recommend_dose(readings: list[tuple[datetime, float]],
                    meals: list[tuple[float, float]] | None = None) -> dict:
     """Personalized once-daily dose recommendation for one patient's CGM."""
@@ -46,6 +66,32 @@ def recommend_dose(readings: list[tuple[datetime, float]],
         "phase_h": round(phase, 2),
         "recommended_dose_h": dose,
         "hours_from_clinic_default": round(abs(dose - CLINIC_DEFAULT_HOUR), 2),
+    }
+
+
+def recommend_from_session(session: dict) -> dict:
+    """Recommendation using the patient's REAL meal schedule (not a standard one)."""
+    return recommend_dose(session["cgm"], typical_meals(session.get("meals", [])))
+
+
+def personalization_spread_real(sessions: list[tuple[str, dict]],
+                                materiality_h: float = 2.0) -> dict:
+    """Per-patient recommendations using each patient's OWN real meals; quantify spread."""
+    import statistics
+    recs = []
+    for _pid, s in sessions:
+        if len(hourly_profile(s["cgm"])) < 12:
+            continue
+        recs.append(recommend_from_session(s))
+    doses = [r["recommended_dose_h"] for r in recs]
+    moved = [r for r in recs if r["hours_from_clinic_default"] >= materiality_h]
+    return {
+        "patients": len(recs),
+        "meals": "each patient's own logged meals",
+        "recommended_dose_mean_h": round(statistics.mean(doses), 2) if doses else 0.0,
+        "recommended_dose_std_h": round(statistics.pstdev(doses), 2) if len(doses) > 1 else 0.0,
+        "recommended_dose_range_h": (round(min(doses), 1), round(max(doses), 1)) if doses else (0, 0),
+        "pct_materially_different_from_clinic": round(100.0 * len(moved) / len(recs), 1) if recs else 0.0,
     }
 
 
